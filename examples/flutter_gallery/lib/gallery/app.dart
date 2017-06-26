@@ -10,6 +10,7 @@ import 'package:flutter/scheduler.dart' show timeDilation;
 
 import 'home.dart';
 import 'item.dart';
+import 'package:flutter_gallery/gallery/notifications.dart';
 import 'updates.dart';
 
 final Map<String, WidgetBuilder> _kRoutes = new Map<String, WidgetBuilder>.fromIterable(
@@ -21,15 +22,16 @@ final Map<String, WidgetBuilder> _kRoutes = new Map<String, WidgetBuilder>.fromI
   value: (GalleryItem item) => item.buildRoute,
 );
 
-final ThemeData _kGalleryLightTheme = new ThemeData(
-  brightness: Brightness.light,
-  primarySwatch: Colors.blue,
-);
+ThemeData _makeTheme({bool dark, Color primary, Color accent, TargetPlatform platform}) {
+  return new ThemeData(
+    brightness: dark ? Brightness.dark : Brightness.light,
+    primarySwatch: Colors.blue,
 
-final ThemeData _kGalleryDarkTheme = new ThemeData(
-  brightness: Brightness.dark,
-  primarySwatch: Colors.blue,
-);
+    primaryColor: primary,
+    accentColor: accent,
+    platform: platform ?? defaultTargetPlatform,
+  );
+}
 
 class GalleryApp extends StatefulWidget {
   const GalleryApp({
@@ -56,6 +58,8 @@ class GalleryApp extends StatefulWidget {
 }
 
 class GalleryAppState extends State<GalleryApp> {
+  Color _primaryColorOverride;
+  Color _accentColorOverride;
   bool _useLightTheme = true;
   bool _showPerformanceOverlay = false;
   bool _checkerboardRasterCacheImages = false;
@@ -138,15 +142,50 @@ class GalleryAppState extends State<GalleryApp> {
       );
     }
 
-    return new MaterialApp(
+    final ThemeData theme = _makeTheme(
+      dark: !_useLightTheme,
+      primary: _primaryColorOverride,
+      accent: _accentColorOverride,
+      platform: _platform
+    );
+
+    Widget root = new MaterialApp(
       title: 'Flutter Gallery',
       color: Colors.grey,
-      theme: (_useLightTheme ? _kGalleryLightTheme : _kGalleryDarkTheme).copyWith(platform: _platform ?? defaultTargetPlatform),
+      theme: theme,
       showPerformanceOverlay: _showPerformanceOverlay,
       checkerboardRasterCacheImages: _checkerboardRasterCacheImages,
       checkerboardOffscreenLayers: _checkerboardOffscreenLayers,
       routes: _kRoutes,
       home: home,
     );
+
+    root = new NotificationListener<GalleryPrimaryColorNotification>(
+      onNotification: _onPrimaryColorNotification,
+      child: root,
+    );
+
+    root = new NotificationListener<GalleryAccentColorNotification>(
+      onNotification: _onAccentColorNotification,
+      child: root,
+    );
+
+    return root;
+  }
+
+  bool _onPrimaryColorNotification(GalleryPrimaryColorNotification notification) {
+    setState(() {
+      _primaryColorOverride = notification.primaryColor;
+    });
+
+    return true;
+  }
+
+  bool _onAccentColorNotification(GalleryAccentColorNotification notification) {
+    setState(() {
+      _accentColorOverride = notification.accentColor;
+    });
+
+    return true;
   }
 }
