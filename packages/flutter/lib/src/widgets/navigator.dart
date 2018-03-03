@@ -553,8 +553,8 @@ class Navigator extends StatefulWidget {
   /// Returns a [Future] that completes to the `result` value passed to [pop]
   /// when the pushed route is popped off the navigator.
   @optionalTypeArgs
-  static Future<T> push<T>(BuildContext context, Route<T> route) {
-    return Navigator.of(context).push(route);
+  static Future<T> push<T>(BuildContext context, Route<T> route, {bool cancelPointerEvents: true}) {
+    return Navigator.of(context).push(route, cancelPointerEvents: cancelPointerEvents);
   }
 
   /// Returns the value of the current route's [Route.willPop] method. This
@@ -910,11 +910,11 @@ class NavigatorState extends State<Navigator> with TickerProviderStateMixin {
   /// [NavigatorObserver.didPush]).
   ///
   /// Ongoing gestures within the current route are canceled when a new route is
-  /// pushed.
+  /// pushed. This can be overridden with `cancelPointerEvents`.
   ///
   /// Returns a [Future] that completes to the `result` value passed to [pop]
   /// when the pushed route is popped off the navigator.
-  Future<Object> push(Route<Object> route) {
+  Future<Object> push(Route<Object> route, {bool cancelPointerEvents: true}) {
     assert(!_debugLocked);
     assert(() { _debugLocked = true; return true; }());
     assert(route != null);
@@ -932,7 +932,9 @@ class NavigatorState extends State<Navigator> with TickerProviderStateMixin {
         observer.didPush(route, oldRoute);
     });
     assert(() { _debugLocked = false; return true; }());
-    _cancelActivePointers();
+    if (cancelPointerEvents) {
+      _cancelActivePointers();
+    }
     return route.popped;
   }
 
