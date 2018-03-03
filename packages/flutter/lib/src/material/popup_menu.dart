@@ -5,12 +5,14 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import 'constants.dart';
 import 'divider.dart';
 import 'icon_button.dart';
 import 'icons.dart';
+import 'ink_highlight.dart';
 import 'ink_well.dart';
 import 'list_tile.dart';
 import 'material.dart';
@@ -32,6 +34,7 @@ const double _kMenuMinWidth = 2.0 * _kMenuWidthStep;
 const double _kMenuVerticalPadding = 8.0;
 const double _kMenuWidthStep = 56.0;
 const double _kMenuScreenPadding = 8.0;
+const double _kMenuTouchSlop = 8.0;
 
 /// A base class for entries in a material design popup menu.
 ///
@@ -80,6 +83,17 @@ abstract class PopupMenuEntry<T> extends StatefulWidget {
   /// if the argument matches that value. If it represents multiple values, it
   /// should return true if the argument matches any of them.
   bool represents(T value);
+
+  /// Called when a user gesture selects this menu item.
+  ///
+  /// The given [BuildContext], `context`, is unspecified except that the widget
+  /// for the given context is within the menu's widget tree.
+  ///
+  /// By default, [Navigator.pop] is called with the menu's underlying item.
+  void select(BuildContext context);
+
+  /// Whether is menu entry is selectable by a user gesture.
+  bool get isSelectable;
 }
 
 /// A horizontal divider in a material design popup menu.
@@ -106,6 +120,12 @@ class PopupMenuDivider extends PopupMenuEntry<Null> {
 
   @override
   bool represents(dynamic value) => false;
+
+  @override
+  void select(BuildContext context) {}
+
+  @override
+  bool get isSelectable => false;
 
   @override
   _PopupMenuDividerState createState() => new _PopupMenuDividerState();
@@ -196,6 +216,14 @@ class PopupMenuItem<T> extends PopupMenuEntry<T> {
   bool represents(T value) => value == this.value;
 
   @override
+  void select(BuildContext context) {
+    Navigator.pop(context, value);
+  }
+
+  @override
+  bool get isSelectable => true;
+
+  @override
   _PopupMenuItemState<PopupMenuItem<T>> createState() => new _PopupMenuItemState<PopupMenuItem<T>>();
 }
 
@@ -204,7 +232,7 @@ class _PopupMenuItemState<T extends PopupMenuItem<dynamic>> extends State<T> {
   Widget buildChild() => widget.child;
 
   void handleTap() {
-    Navigator.pop(context, widget.value);
+    widget.select(context);
   }
 
   @override
@@ -231,6 +259,8 @@ class _PopupMenuItemState<T extends PopupMenuItem<dynamic>> extends State<T> {
       );
     }
 
+    // TODO: Opening a menu with the glide gesture and tapping an item with another finger causes lots of errors, change popup menu to have an inherited widget so it can function as a controller
+
     return new InkWell(
       onTap: widget.enabled ? handleTap : null,
       child: new MergeSemantics(
@@ -241,6 +271,136 @@ class _PopupMenuItemState<T extends PopupMenuItem<dynamic>> extends State<T> {
         )
       )
     );
+  }
+}
+
+class _PopupMenuItemGlideHandler extends StatefulWidget {
+  final PopupMenuForwardedGlide glide;
+  final Widget child;
+  final VoidCallback onGlideSelect;
+
+  const _PopupMenuItemGlideHandler({Key key, this.glide, this.child, this.onGlideSelect});
+
+  @override
+  _PopupMenuItemGlideHandlerState createState() => new _PopupMenuItemGlideHandlerState();
+}
+
+class _PopupMenuItemGlideHandlerState extends State<_PopupMenuItemGlideHandler> {
+  bool _gestureIsInside = false;
+  InkHighlight _inkHighlight;
+  Set<InteractiveInkFeature> _runningInkSplashes = new Set<InteractiveInkFeature>();
+  InteractiveInkFeature _inkSplash;
+
+  void _handleGlidePosition(Offset globalPosition) {
+    final RenderBox box = context.findRenderObject();
+    final Rect rect = new Rect.fromPoints(
+      box.localToGlobal(Offset.zero),
+      box.localToGlobal(box.size.bottomRight(Offset.zero)),
+    );
+    if (rect.contains(globalPosition)) {
+      if (!_gestureIsInside) {
+        _gestureIsInside = true;
+
+        InteractiveInkFeature splash;
+        splash = Theme.of(context).splashFactory.create(
+          controller: Material.of(context),
+          referenceBox: box,
+          position: globalPosition - rect.topLeft,
+          color: Theme.of(context).highlightColor,
+          containedInkWell: true,
+          onRemoved: () {
+            if (_inkSplash == splash) {
+              _inkSplash = null;
+            }
+            if (_runningInkSplashes != null) {
+              _runningInkSplashes.remove(splash);
+            }
+          }
+        );
+        _runningInkSplashes.add(splash);
+        _inkSplash = splash;
+
+        InkHighlight highlight;
+        highlight = new InkHighlight(
+          controller: Material.of(context),
+          referenceBox: box,
+          color: Theme.of(context).highlightColor,
+          onRemoved: () {
+            if (_inkHighlight == highlight) {
+              _inkHighlight = null;
+            }
+          }
+        );
+        _inkHighlight = highlight;
+      }
+    } else {
+      if (_gestureIsInside) {
+        _gestureIsInside = false;
+
+        final Set<InteractiveInkFeature> splashes = _runningInkSplashes;
+        _runningInkSplashes = null;
+        for (final InteractiveInkFeature splash in splashes) {
+          splash.cancel();
+        }
+        _runningInkSplashes = splashes;
+
+        _inkHighlight.deactivate();
+      }
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    widget.glide.addListener(_onGlideUpdated);
+  }
+
+  @override
+  void didUpdateWidget(_PopupMenuItemGlideHandler oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.glide != widget.glide) {
+      oldWidget.glide.removeListener(_onGlideUpdated);
+      widget.glide.addListener(_onGlideUpdated);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.glide.removeListener(_onGlideUpdated);
+
+    super.dispose();
+  }
+
+  @override
+  void deactivate() {
+    final Set<InteractiveInkFeature> splashes = _runningInkSplashes;
+    _runningInkSplashes = null;
+    for (final InteractiveInkFeature splash in splashes) {
+      splash.dispose();
+    }
+
+    _inkHighlight?.dispose();
+    _inkHighlight = null;
+
+    super.deactivate();
+  }
+
+  void _onGlideUpdated() {
+    if (widget.glide.ongoing) {
+      _handleGlidePosition(widget.glide.globalPosition);
+    } else {
+      if (_gestureIsInside) {
+        _inkSplash.confirm();
+        widget.onGlideSelect();
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return widget.child;
   }
 }
 
@@ -385,13 +545,68 @@ class _CheckedPopupMenuItemState<T> extends _PopupMenuItemState<CheckedPopupMenu
   }
 }
 
-class _PopupMenu<T> extends StatelessWidget {
+class _PopupMenu<T> extends StatefulWidget {
   const _PopupMenu({
     Key key,
-    this.route
+    this.route,
+    this.glide,
   }) : super(key: key);
 
   final _PopupMenuRoute<T> route;
+  final PopupMenuForwardedGlide glide;
+
+  @override
+  State<_PopupMenu<T>> createState() {
+    return new _PopupMenuState<T>();
+  }
+}
+
+class _PopupMenuState<T> extends State<_PopupMenu<T>> {
+  _PopupMenuRoute<T> get route => widget.route;
+
+  bool get hasGlideGesture => widget.glide != null;
+
+  bool _glideSelected = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    widget.glide?.addListener(_onGlideUpdated);
+  }
+
+  @override
+  void didUpdateWidget(_PopupMenu<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.glide != widget.glide) {
+      oldWidget.glide?.removeListener(_onGlideUpdated);
+      widget.glide?.addListener(_onGlideUpdated);
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.glide != null) {
+      widget.glide.removeListener(_onGlideUpdated);
+      widget.glide.dispose();
+    }
+
+    super.dispose();
+  }
+
+  void _onGlideUpdated() {
+    if (!widget.glide.ongoing) {
+      // We schedule a microtask so other listeners
+      // (like [_PopupMenuGlideHandler]) can make their exit decision before we
+      // decide to exit without a result.
+      scheduleMicrotask(() {
+        if (!_glideSelected) {
+          Navigator.pop(context);
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -405,13 +620,27 @@ class _PopupMenu<T> extends StatelessWidget {
         parent: route.animation,
         curve: new Interval(start, end)
       );
-      Widget item = route.items[i];
+      final PopupMenuItem<T> initialItem = route.items[i];
+      Widget item = initialItem;
+
+      if (hasGlideGesture && initialItem.isSelectable && initialItem.enabled) {
+        item = new _PopupMenuItemGlideHandler(
+          glide: widget.glide,
+          child: item,
+          onGlideSelect: () {
+            initialItem.select(context);
+            _glideSelected = true;
+          },
+        );
+      }
+
       if (route.initialValue != null && route.items[i].represents(route.initialValue)) {
         item = new Container(
           color: Theme.of(context).highlightColor,
           child: item,
         );
       }
+
       children.add(new FadeTransition(
         opacity: opacity,
         child: item,
@@ -548,6 +777,7 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
     this.elevation,
     this.theme,
     this.barrierLabel,
+    this.glide,
   });
 
   final RelativeRect position;
@@ -555,6 +785,7 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
   final dynamic initialValue;
   final double elevation;
   final ThemeData theme;
+  final PopupMenuForwardedGlide glide;
 
   @override
   Animation<double> createAnimation() {
@@ -591,7 +822,10 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
       }
     }
 
-    Widget menu = new _PopupMenu<T>(route: this);
+    Widget menu = new _PopupMenu<T>(
+      route: this,
+      glide: glide,
+    );
     if (theme != null)
       menu = new Theme(data: theme, child: menu);
 
@@ -652,6 +886,10 @@ class _PopupMenuRoute<T> extends PopupRoute<T> {
 /// the menu. It is only used when the method is called. Its corresponding
 /// widget can be safely removed from the tree before the popup menu is closed.
 ///
+/// The `glide` argument is used to forward the user's "glide" gesture into the
+/// menu. This should be `null` if the menu wasn't opened because of the user's
+/// "glide" gesture.
+///
 /// See also:
 ///
 ///  * [PopupMenuItem], a popup menu entry for a single value.
@@ -665,6 +903,7 @@ Future<T> showMenu<T>({
   @required List<PopupMenuEntry<T>> items,
   T initialValue,
   double elevation: 8.0,
+  PopupMenuForwardedGlide glide,
 }) {
   assert(context != null);
   assert(items != null && items.isNotEmpty);
@@ -675,7 +914,8 @@ Future<T> showMenu<T>({
     elevation: elevation,
     theme: Theme.of(context, shadowThemeOnly: true),
     barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
-  ));
+    glide: glide,
+  ), cancelPointerEvents: glide == null);
 }
 
 /// Signature for the callback invoked when a menu item is selected. The
@@ -796,7 +1036,14 @@ class PopupMenuButton<T> extends StatefulWidget {
 }
 
 class _PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
-  void showButtonMenu() {
+  PopupMenuForwardedGlide glide;
+
+  void showButtonMenu({bool withGesture: false, Offset initialGesturePosition}) {
+    assert(glide == null);
+    if (withGesture) {
+      glide = new PopupMenuForwardedGlide(initialGesturePosition);
+    }
+
     final RenderBox button = context.findRenderObject();
     final RenderBox overlay = Overlay.of(context).context.findRenderObject();
     final RelativeRect position = new RelativeRect.fromRect(
@@ -812,6 +1059,7 @@ class _PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
       items: widget.itemBuilder(context),
       initialValue: widget.initialValue,
       position: position,
+      glide: glide,
     )
     .then<Null>((T newValue) {
       if (!mounted || newValue == null)
@@ -833,18 +1081,92 @@ class _PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
     return null;
   }
 
+  void _cancelGlide() {
+    glide.stop();
+    glide = null;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return widget.child != null
-      ? new InkWell(
-          onTap: showButtonMenu,
-          child: widget.child,
-        )
-      : new IconButton(
-          icon: widget.icon ?? _getIcon(Theme.of(context).platform),
-          padding: widget.padding,
-          tooltip: widget.tooltip ?? MaterialLocalizations.of(context).showMenuTooltip,
-          onPressed: showButtonMenu,
+    return new GestureDetector(
+      child: widget.child != null
+          ? new InkWell(
+              onTap: showButtonMenu,
+              child: widget.child,
+            )
+          : new IconButton(
+              icon: widget.icon ?? _getIcon(Theme.of(context).platform),
+              padding: widget.padding,
+              tooltip: widget.tooltip ?? MaterialLocalizations.of(context).showMenuTooltip,
+              onPressed: showButtonMenu,
+            ),
+      behavior: HitTestBehavior.deferToChild,
+      onPanUpdate: (DragUpdateDetails details) {
+        // If we're tracking a glide, update its position.
+        // Otherwise, try to start a new glide gesture.
+
+        if (glide != null) {
+          glide.update(details.globalPosition);
+          return;
+        }
+
+        final RenderBox button = context.findRenderObject();
+        final Rect rect = new Rect.fromPoints(
+          button.localToGlobal(Offset.zero),
+          button.localToGlobal(button.size.bottomRight(Offset.zero)),
         );
+        final Rect expandedRect = rect.inflate(_kMenuTouchSlop);
+        if (!expandedRect.contains(details.globalPosition)) {
+          // When the pointer exits the expanded touch boundaries we show the
+          // menu. We also set up gesture forwarding so the menu can react to
+          // pointer movements.
+          showButtonMenu(withGesture: true);
+        }
+      },
+      onPanEnd: (DragEndDetails details) {
+        if (glide != null) {
+          _cancelGlide();
+        }
+      },
+    );
+  }
+}
+
+/// Tracks the state of the glide gesture that invoked the popup menu.
+///
+/// This must be disposed by the widget listening to the glide gesture.
+class PopupMenuForwardedGlide extends ChangeNotifier {
+  /// The last recorded position of the pointer that started the glide gesture.
+  ///
+  /// This will not be updated if [ongoing] is false.
+  Offset globalPosition;
+
+  /// Whether the glide gesture is still going or not.
+  bool ongoing = true;
+
+  /// Initializes the glide gesture at the given position.
+  PopupMenuForwardedGlide(this.globalPosition);
+
+  /// Updates the glide gesture's position and notifies listeners.
+  ///
+  /// This method should not be used after calling [stop] or [dispose].
+  void update(Offset position) {
+    assert(ongoing);
+    globalPosition = position;
+    notifyListeners();
+  }
+
+  /// Stops the glide gesture and notifies listeners.
+  ///
+  /// This method can only be called once before calling [dispose].
+  void stop() {
+    assert(ongoing);
+    ongoing = false;
+    notifyListeners();
+  }
+
+  @override
+  String toString() {
+    return 'PopupMenuForwardedGlide { position = $globalPosition, ongoing = $ongoing }';
   }
 }
